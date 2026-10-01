@@ -1,0 +1,15 @@
+# Dependencies
+node_modules/
+
+# WAHA session data (persisted WhatsApp login — contains auth tokens)
+WAHA_Hospital_Automation/waha_data/
+
+# Runtime state files
+.hms_pid
+
+# SQLite databases
+*.db-journal
+
+# OS files
+Thumbs.db
+.DS_Store

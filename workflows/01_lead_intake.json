@@ -1,0 +1,362 @@
+{
+  "name": "HOSPITAL | 01 Lead Intake",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "hospital-demo-lead",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "webhookId": "hospital-demo-lead",
+      "id": "wf1-node-webhook",
+      "name": "Webhook Lead In",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        160,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst raw = $input.first().json.body || $input.first().json;\nconst now = new Date();\nconst ymd = now.toISOString().slice(0, 10).replace(/-/g, '');\nconst randomSuffix = Math.floor(100000 + Math.random() * 900000);\n\nconst full_name = (raw.full_name || 'Anonymous Patient').trim();\nconst phone = (raw.phone || '').trim();\nconst department = (raw.department || 'General Medicine').trim();\nconst preferred_date = (raw.preferred_date || now.toISOString().slice(0, 10)).trim();\nconst enquiry_text = (raw.enquiry_text || 'Consultation request').trim();\nconst source = (raw.source || 'Web Form').trim();\nconst correlation_id = raw.correlation_id || `HOSP-${ymd}-${randomSuffix}`;\n\nreturn [{\n  json: {\n    full_name,\n    phone,\n    department,\n    preferred_date,\n    enquiry_text,\n    source,\n    correlation_id,\n    timestamp: now.toISOString()\n  }\n}];\n"
+      },
+      "id": "wf1-node-normalize",
+      "name": "Normalize Fields & Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        380,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst item = $input.first().json;\n\n// Master System Prompt + Prompt 1 - Lead Qualification\nconst validDepts = ['Cardiology', 'Dermatology', 'Orthopedics', 'General Medicine'];\nlet assignedDept = item.department;\n\n// Match text keywords if department not directly matched\nconst text = (item.enquiry_text + ' ' + item.department).toLowerCase();\nif (text.includes('skin') || text.includes('acne') || text.includes('derma') || text.includes('rash')) {\n  assignedDept = 'Dermatology';\n} else if (text.includes('heart') || text.includes('cardio') || text.includes('chest') || text.includes('ecg')) {\n  assignedDept = 'Cardiology';\n} else if (text.includes('bone') || text.includes('joint') || text.includes('ortho') || text.includes('knee') || text.includes('fracture')) {\n  assignedDept = 'Orthopedics';\n} else if (!validDepts.includes(assignedDept)) {\n  assignedDept = 'General Medicine';\n}\n\nconst isEmergency = text.includes('emergency') || text.includes('severe bleeding') || text.includes('unconscious');\n\nconst qualification = {\n  department: assignedDept,\n  enquiry_type: 'consultation',\n  patient_status: 'new',\n  priority_for_human_review: isEmergency ? 'review' : 'normal',\n  missing_information: item.phone ? [] : ['phone'],\n  reason: isEmergency ? 'Clinical emergency indicator detected' : 'Standard outpatient consultation request',\n  ...item\n};\n\nreturn [{ json: qualification }];\n"
+      },
+      "id": "wf1-node-ai-qualify",
+      "name": "AI Lead Qualification",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        600,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:3001/api/patients",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"full_name\": \"{{ $json.full_name }}\",\n  \"phone\": \"{{ $json.phone }}\",\n  \"source\": \"{{ $json.source }}\",\n  \"consent_status\": \"granted\"\n}",
+        "options": {}
+      },
+      "id": "wf1-node-save-patient",
+      "name": "Upsert Patient Record",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        820,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:3001/api/leads",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"patient_id\": \"{{ $json.patient_id }}\",\n  \"source\": \"{{ $('AI Lead Qualification').item.json.source }}\",\n  \"enquiry_text\": \"{{ $('AI Lead Qualification').item.json.enquiry_text }}\",\n  \"department\": \"{{ $('AI Lead Qualification').item.json.department }}\",\n  \"priority\": \"{{ $('AI Lead Qualification').item.json.priority_for_human_review }}\",\n  \"status\": \"qualified\"\n}",
+        "options": {}
+      },
+      "id": "wf1-node-save-lead",
+      "name": "Create Qualified Lead",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1040,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=http://localhost:3001/api/slots?department={{ encodeURIComponent($('AI Lead Qualification').item.json.department) }}&date={{ encodeURIComponent($('AI Lead Qualification').item.json.preferred_date) }}",
+        "options": {}
+      },
+      "id": "wf1-node-check-slots",
+      "name": "Lookup Available Slots",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1260,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "slot-check",
+              "leftValue": "={{ $json.count }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "wf1-node-if-slot",
+      "name": "Slot Available?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1480,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:3001/api/appointments",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"patient_id\": \"{{ $('Upsert Patient Record').item.json.patient_id }}\",\n  \"department\": \"{{ $('Lookup Available Slots').item.json.available_slots[0].department }}\",\n  \"doctor_id\": \"{{ $('Lookup Available Slots').item.json.available_slots[0].doctor_id }}\",\n  \"doctor_name\": \"{{ $('Lookup Available Slots').item.json.available_slots[0].doctor_name }}\",\n  \"slot_start\": \"{{ $('Lookup Available Slots').item.json.available_slots[0].slot_date }} {{ $('Lookup Available Slots').item.json.available_slots[0].slot_time }}\",\n  \"slot_id\": \"{{ $('Lookup Available Slots').item.json.available_slots[0].slot_id }}\",\n  \"status\": \"confirmed\"\n}",
+        "options": {}
+      },
+      "id": "wf1-node-book-appt",
+      "name": "Book Appointment",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1720,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst appt = $input.first().json;\nconst leadInfo = $('AI Lead Qualification').first().json;\nconst patientInfo = $('Upsert Patient Record').first().json;\nconst slot = $('Lookup Available Slots').first().json.available_slots[0];\n\n// Blueprint Section J: Prompt 2 - Appointment Confirmation Message\nconst message = `Hi ${leadInfo.full_name}, your appointment is confirmed.\\n\\n*${slot.doctor_name}* · ${slot.department}\\n${slot.slot_date} at ${slot.slot_time}\\nReference: ${appt.appointment_id}\\n\\nIf you need help before your visit, just message us here.`;\n\nreturn [{\n  json: {\n    appointment_id: appt.appointment_id,\n    patient_id: patientInfo.patient_id,\n    full_name: leadInfo.full_name,\n    doctor_name: slot.doctor_name,\n    department: slot.department,\n    confirmed_slot: `${slot.slot_date} ${slot.slot_time}`,\n    confirmation_message: message,\n    correlation_id: leadInfo.correlation_id\n  }\n}];\n"
+      },
+      "id": "wf1-node-draft-confirm",
+      "name": "Draft Confirmation Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1940,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:3001/api/communication-logs",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"patient_id\": \"{{ $json.patient_id }}\",\n  \"channel\": \"whatsapp\",\n  \"template_name\": \"APPT_CONFIRM_01\",\n  \"workflow_name\": \"HOSPITAL | 01 Lead Intake\",\n  \"message_body\": \"{{ $json.confirmation_message }}\",\n  \"delivery_status\": \"delivered\",\n  \"correlation_id\": \"{{ $json.correlation_id }}\"\n}",
+        "options": {}
+      },
+      "id": "wf1-node-log-comm",
+      "name": "Log Communication",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        2160,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"success\": true,\n  \"status\": \"confirmed\",\n  \"appointment_id\": \"{{ $('Draft Confirmation Message').item.json.appointment_id }}\",\n  \"doctor_name\": \"{{ $('Draft Confirmation Message').item.json.doctor_name }}\",\n  \"department\": \"{{ $('Draft Confirmation Message').item.json.department }}\",\n  \"confirmed_slot\": \"{{ $('Draft Confirmation Message').item.json.confirmed_slot }}\",\n  \"message\": \"{{ $('Draft Confirmation Message').item.json.confirmation_message }}\",\n  \"correlation_id\": \"{{ $('Draft Confirmation Message').item.json.correlation_id }}\"\n}",
+        "options": {}
+      },
+      "id": "wf1-node-respond-ok",
+      "name": "Respond Success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        2380,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:3001/api/exceptions",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"workflow_name\": \"HOSPITAL | 01 Lead Intake\",\n  \"record_id\": \"{{ $('AI Lead Qualification').item.json.correlation_id }}\",\n  \"error_type\": \"NO_SLOTS_AVAILABLE\",\n  \"severity\": \"high\",\n  \"owner\": \"Front Desk Coordinator\",\n  \"resolution_note\": \"No available slots for {{ $('AI Lead Qualification').item.json.department }} on {{ $('AI Lead Qualification').item.json.preferred_date }}. Contact patient to reschedule.\"\n}",
+        "options": {}
+      },
+      "id": "wf1-node-log-exc",
+      "name": "Log Exception Queue",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1720,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"success\": false,\n  \"status\": \"NEEDS_HUMAN_REVIEW\",\n  \"reason\": \"Requested slot unavailable. Logged in exception queue for human follow-up.\",\n  \"department\": \"{{ $('AI Lead Qualification').item.json.department }}\",\n  \"correlation_id\": \"{{ $('AI Lead Qualification').item.json.correlation_id }}\"\n}",
+        "options": {}
+      },
+      "id": "wf1-node-respond-fail",
+      "name": "Respond Needs Review",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1940,
+        420
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook Lead In": {
+      "main": [
+        [
+          {
+            "node": "Normalize Fields & Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Fields & Context": {
+      "main": [
+        [
+          {
+            "node": "AI Lead Qualification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Lead Qualification": {
+      "main": [
+        [
+          {
+            "node": "Upsert Patient Record",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upsert Patient Record": {
+      "main": [
+        [
+          {
+            "node": "Create Qualified Lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Qualified Lead": {
+      "main": [
+        [
+          {
+            "node": "Lookup Available Slots",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lookup Available Slots": {
+      "main": [
+        [
+          {
+            "node": "Slot Available?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Slot Available?": {
+      "main": [
+        [
+          {
+            "node": "Book Appointment",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Exception Queue",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Book Appointment": {
+      "main": [
+        [
+          {
+            "node": "Draft Confirmation Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Draft Confirmation Message": {
+      "main": [
+        [
+          {
+            "node": "Log Communication",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Communication": {
+      "main": [
+        [
+          {
+            "node": "Respond Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Exception Queue": {
+      "main": [
+        [
+          {
+            "node": "Respond Needs Review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

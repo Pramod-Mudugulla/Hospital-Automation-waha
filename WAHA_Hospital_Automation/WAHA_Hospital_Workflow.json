@@ -1,0 +1,458 @@
+{
+  "name": "WAHA | AI Human Healthcare Coordinator",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "waha-inbound",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "0de53c23-9f81-4bc5-8c08-5cc32347bb08",
+      "name": "WAHA Webhook Inbound",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -900,
+        100
+      ],
+      "webhookId": "waha-inbound"
+    },
+    {
+      "parameters": {
+        "jsCode": "// =========================================================================\n// 🏥 HOSPITAL CONFIG — Change your hospital name, persona, AI model here\n// =========================================================================\nconst config = {\n  hospitalName: \"DemoCare Multispeciality Hospital\",\n  coordinatorName: \"Sarah\",\n  contactPhone: \"+91-9876543210\",\n  emergencyHotline: \"+91-9876543210 (or dial 108)\",\n  hospitalAddress: \"DemoCare Tower, 4th Block, Healthcare Boulevard\",\n  workingHours: \"Mon-Sat 8 AM - 8 PM (Emergency 24/7)\",\n  ollamaEndpoint: \"http://127.0.0.1:11434/api/chat\",\n  ollamaModel: \"gemma3:4b\"\n};\nconst inbound = $input.first().json;\nreturn [{ json: { ...config, inbound_raw: inbound } }];"
+      },
+      "id": "7b13a890-449e-4c7b-b38c-8f19da4c0155",
+      "name": "Hospital & AI Settings",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -700,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const cfgNode = $('Hospital & AI Settings').first().json;\nconst body = cfgNode.inbound_raw.body || cfgNode.inbound_raw;\nconst payload = body.payload || {};\nif (body.event !== 'message' || payload.fromMe === true) return [];\nconst sender = payload.from || '';\nconst phone = sender.replace('@c.us', '').replace('@s.whatsapp.net', '').replace('@lid', '');\nconst text = String(payload.body || '').trim();\nif (!phone || !text) return [];\nconst emergency = /chest pain|heart attack|trouble breathing|cannot breathe|unconscious|heavy bleeding|stroke|seizure/i.test(text);\nlet department = '';\nif (/skin|rash|allergy|acne|face|itch|dermat|bump|pimple/i.test(text)) department = 'Dermatology';\nelse if (/heart|cardio|chest|bp|pulse|palpitat/i.test(text)) department = 'Cardiology';\nelse if (/bone|joint|fracture|knee|ortho|leg|back pain|sprain|ankle|hip|shoulder/i.test(text)) department = 'Orthopedics';\nelse if (/fever|cough|cold|headache|stomach|flu|vomit|general|diabetes|infection/i.test(text)) department = 'General Medicine';\nreturn [{ json: {\n  session: body.session || 'Demo1', chat_id: sender, phone,\n  patient_name: payload._data?.notifyName || payload.notifyName || 'there',\n  inquiry_text: text, inbound_message_id: payload.id || null, department,\n  is_emergency: emergency, correlation_id: `WAHA-${Date.now()}-${Math.floor(Math.random() * 10000)}`\n} }];"
+      },
+      "id": "38caa69d-c70c-4f81-abab-8d7cc95af597",
+      "name": "Parse WhatsApp & Guardrails",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -500,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.is_emergency }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "fdbf7e1b-e63c-400c-b0ce-b8fde9994d70",
+      "name": "Is Emergency?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        -300,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://127.0.0.1:3000/api/sendText",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ session: $('Parse WhatsApp & Guardrails').first().json.session || 'Demo1', chatId: $('Parse WhatsApp & Guardrails').first().json.chat_id, text: '⚠️ *URGENT — ' + $('Hospital & AI Settings').first().json.hospitalName + '*\\n\\nDear ' + $('Parse WhatsApp & Guardrails').first().json.patient_name + ', your message indicates a possible medical emergency.\\n\\n🚨 Please call our 24/7 Emergency Line immediately: ' + $('Hospital & AI Settings').first().json.emergencyHotline + '\\n\\n📍 Our Emergency wing is open 24/7 at ' + $('Hospital & AI Settings').first().json.hospitalAddress }) }}",
+        "options": {
+          "timeout": 5000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "62aaee3c52fd40a68de689e6319beb30"
+            }
+          ]
+        }
+      },
+      "id": "9a1c916e-dc4c-48f4-a046-618ff6ec0033",
+      "name": "Send Emergency Alert via WAHA",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        -50,
+        -50
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=http://127.0.0.1:3001/api/slots{{ $json.department ? '?department=' + encodeURIComponent($json.department) : '' }}",
+        "options": {}
+      },
+      "id": "7ef5f89b-275b-4689-8722-00bd8c9ced45",
+      "name": "Fetch Real Slots from DB",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        -50,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $('Choose Requested Slot').first().json.is_booking_request }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "b3e21544-7788-466a-b601-50e58fbe54c1",
+      "name": "Is Booking Intent?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        180,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://127.0.0.1:3001/api/appointments",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ patient_name: $('Parse WhatsApp & Guardrails').first().json.patient_name, phone: $('Parse WhatsApp & Guardrails').first().json.phone, department: $('Choose Requested Slot').first().json.selected_slot.department, doctor_name: $('Choose Requested Slot').first().json.selected_slot.doctor_name, doctor_id: $('Choose Requested Slot').first().json.selected_slot.doctor_id, slot_start: $('Choose Requested Slot').first().json.selected_slot.slot_time, slot_id: $('Choose Requested Slot').first().json.selected_slot.slot_id, source: 'WhatsApp Automation' }) }}",
+        "options": {}
+      },
+      "id": "7fe9c545-afb5-45c0-b72f-d36f9cd15145",
+      "name": "Book Appointment in DB",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        400,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const cfg = $('Hospital & AI Settings').first().json;\nconst patient = $('Parse WhatsApp & Guardrails').first().json;\nconst selection = $('Choose Requested Slot').first().json;\nconst history = $('Fetch Conversation History').first().json.messages || [];\nconst slots = (selection.available_slots || []).slice(0, 4);\nconst slotInfo = slots.length ? slots.map((s) => `- ${s.doctor_name} (${s.department}): ${s.slot_date} at ${s.slot_time}`).join('\\n') : '- No matching online slots are currently available.';\nconst booked = (() => { try { return $('Book Appointment in DB').first().json; } catch { return null; } })();\nconst bookingNote = booked?.appointment_id ? `\\nA booking is confirmed: ${booked.appointment_id} for ${selection.selected_slot.doctor_name} on ${selection.selected_slot.slot_date} at ${selection.selected_slot.slot_time}.` : '';\nconst system = `You are ${cfg.coordinatorName}, the WhatsApp reception coordinator at ${cfg.hospitalName}. You are continuing one private patient conversation.\\n\\nSafety and style rules:\\n- Reply only as the coordinator. Never write a patient message, a speaker label, a heading, or quotation marks.\\n- Use 1-3 short, natural sentences. Plain text only; use a line break only for confirmed appointment details.\\n- Never invent symptoms, names, prior statements, doctors, dates, or appointments. If the patient only greets you, greet them and ask one open question.\\n- If they correct an assumption, apologise briefly and reset the conversation.\\n- For symptoms, acknowledge the concern without diagnosing. Use respectful medical terms for sensitive areas. Recommend a consultation only after they describe the concern.\\n- Offer at most two relevant real slots. Do not book or imply a booking unless BOOKING CONFIRMED appears below.\\n- Do not ask patients to press keys or use canned commands.\\n\\nAvailable slots:\\n${slotInfo}${bookingNote}`;\nconst messages = [{ role: 'system', content: system }, ...history.map(({ role, content }) => ({ role, content })), { role: 'user', content: patient.inquiry_text }];\nreturn [{ json: { model: cfg.ollamaModel, messages, session: patient.session, chat_id: patient.chat_id, phone: patient.phone, patient_name: patient.patient_name, patient_message: patient.inquiry_text, inbound_message_id: patient.inbound_message_id } }];"
+      },
+      "id": "c1f1025a-493a-4428-98e6-e17f05c74232",
+      "name": "Draft AI Message Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        640,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://127.0.0.1:11434/api/chat",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: $json.model, messages: $json.messages, stream: false, options: { temperature: 0.25, num_predict: 100 } }) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "e217036b-73b2-4d5c-99d7-55df98722f4b",
+      "name": "Generate Human Reply (Ollama)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        860,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const prev = $('Draft AI Message Prompt').first().json;\nlet text = String($input.first().json.message?.content || $input.first().json.response || '')\n  .replace(/^(here(?:'s| is)|sure)[^:]*:\\s*/i, '')\n  .replace(/^(sarah|assistant|[A-Z][a-z]+(?: [A-Z][a-z]+)*):\\s*/i, '')\n  .replace(/^[\\\"'`]+|[\\\"'`]+$/g, '').trim();\nconst normalized = prev.patient_message.trim().toLowerCase();\nif (/^(hi|hello|hey)[!. ]*$/.test(normalized)) text = `Hi ${prev.patient_name} — how can I help today?`;\nif (/haven't mentioned|have not mentioned|didn't mention|did not mention/.test(normalized)) text = `You’re right — sorry about that. What would you like help with today?`;\nif (/butt hole|butthole|anal|rectal/.test(normalized) && /bump|pain|hurt|bleed|itch/.test(normalized)) text = `I’m sorry you’re dealing with that discomfort. A painful bump in the rectal area should be assessed by a doctor — would you like me to check a suitable appointment?`;\nif (!text || text.length > 700) text = `Thanks for your message, ${prev.patient_name}. How can I help today?`;\nreturn [{ json: { ...prev, text } }];"
+      },
+      "id": "4e112d7b-4028-48b2-b16b-ef19c836be07",
+      "name": "Format Human Reply",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1080,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://127.0.0.1:3000/api/sendText",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ session: $('Format Human Reply').first().json.session || 'Demo1', chatId: $('Format Human Reply').first().json.chat_id, text: $('Format Human Reply').first().json.text }) }}",
+        "options": {
+          "timeout": 5000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "62aaee3c52fd40a68de689e6319beb30"
+            }
+          ]
+        }
+      },
+      "id": "7c4b549e-892f-4fe0-b049-a5b3f6b1567a",
+      "name": "Send WhatsApp Reply via WAHA",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        1300,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ success: true, status: 'ai_replied_via_waha', recipient: $('Format Human Reply').first().json.chat_id, preview: $('Format Human Reply').first().json.text.slice(0, 80) + '...' }) }}",
+        "options": {}
+      },
+      "id": "d54b7de2-5aec-4739-989b-230346b4652f",
+      "name": "Webhook Acknowledge",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1520,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const patient = $('Parse WhatsApp & Guardrails').first().json;\nconst slots = $input.first().json.available_slots || [];\nconst text = patient.inquiry_text.toLowerCase();\nconst wantsBooking = /\\b(book|confirm|reserve|schedule)\\b/.test(text);\nconst time = text.match(/\\b(?:0?[1-9]|1[0-2])(?::[0-5]\\d)?\\s*(?:a\\.?m\\.?|p\\.?m\\.?)\\b/i)?.[0]?.replace(/\\./g, '').replace(/\\s+/g, ' ').toUpperCase();\nconst doctor = slots.find((slot) => text.includes(slot.doctor_name.replace(/^Dr\\.\\s*/i, '').toLowerCase()));\nconst timeMatches = time ? slots.filter((slot) => slot.slot_time.replace(/\\./g, '').toUpperCase() === time) : [];\nconst selected_slot = doctor || (timeMatches.length === 1 ? timeMatches[0] : null);\nreturn [{ json: { ...$input.first().json, selected_slot, is_booking_request: wantsBooking && !!selected_slot } }];"
+      },
+      "name": "Choose Requested Slot",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1040,
+        380
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=http://127.0.0.1:3001/api/conversations/{{ $('Parse WhatsApp & Guardrails').first().json.phone }}?limit=8",
+        "options": {
+          "timeout": 5000
+        }
+      },
+      "name": "Fetch Conversation History",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1220,
+        380
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://127.0.0.1:3001/api/conversations",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ phone: $('Format Human Reply').first().json.phone, user_message: $('Format Human Reply').first().json.patient_message, assistant_message: $('Format Human Reply').first().json.text, inbound_message_id: $('Format Human Reply').first().json.inbound_message_id }) }}",
+        "options": {
+          "timeout": 5000
+        }
+      },
+      "name": "Store Conversation Turn",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1940,
+        460
+      ]
+    }
+  ],
+  "connections": {
+    "WAHA Webhook Inbound": {
+      "main": [
+        [
+          {
+            "node": "Hospital & AI Settings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Hospital & AI Settings": {
+      "main": [
+        [
+          {
+            "node": "Parse WhatsApp & Guardrails",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse WhatsApp & Guardrails": {
+      "main": [
+        [
+          {
+            "node": "Is Emergency?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Emergency?": {
+      "main": [
+        [
+          {
+            "node": "Send Emergency Alert via WAHA",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Fetch Real Slots from DB",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Real Slots from DB": {
+      "main": [
+        [
+          {
+            "node": "Choose Requested Slot",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Booking Intent?": {
+      "main": [
+        [
+          {
+            "node": "Book Appointment in DB",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Draft AI Message Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Book Appointment in DB": {
+      "main": [
+        [
+          {
+            "node": "Draft AI Message Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Draft AI Message Prompt": {
+      "main": [
+        [
+          {
+            "node": "Generate Human Reply (Ollama)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Human Reply (Ollama)": {
+      "main": [
+        [
+          {
+            "node": "Format Human Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Human Reply": {
+      "main": [
+        [
+          {
+            "node": "Send WhatsApp Reply via WAHA",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send WhatsApp Reply via WAHA": {
+      "main": [
+        [
+          {
+            "node": "Store Conversation Turn",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Choose Requested Slot": {
+      "main": [
+        [
+          {
+            "node": "Fetch Conversation History",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Conversation History": {
+      "main": [
+        [
+          {
+            "node": "Is Booking Intent?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Store Conversation Turn": {
+      "main": [
+        [
+          {
+            "node": "Webhook Acknowledge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

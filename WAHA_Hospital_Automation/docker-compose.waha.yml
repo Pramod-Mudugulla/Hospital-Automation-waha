@@ -1,0 +1,36 @@
+# ==============================================================================
+# WAHA (WhatsApp HTTP API) — Free Self-Hosted WhatsApp Web Gateway
+# Docker Compose setup for local DemoCare Hospital Automation testing
+#
+# IMPORTANT: The API key below is also hardcoded in the n8n workflow
+# (WAHA_Hospital_Workflow.json). If you change it here, update the
+# workflow's x-api-key headers AND the Hospital & AI Settings node too.
+# ==============================================================================
+
+services:
+  waha:
+    image: devlikeapro/waha:latest
+    container_name: waha_hospital_demo
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      # Fixed API key — matches the n8n WAHA workflow headers
+      - WAHA_API_KEY=62aaee3c52fd40a68de689e6319beb30
+      # Automatically forward all incoming patient WhatsApp messages to local n8n
+      - WAHA_WEBHOOK_URL=http://host.docker.internal:5678/webhook/waha-inbound
+      - WAHA_WEBHOOK_EVENTS=message
+      # Web session engine (WebJS)
+      - WHATSAPP_DEFAULT_ENGINE=WEBJS
+      # Enable Dashboard at http://localhost:3000/ with no password prompt
+      - WAHA_DASHBOARD_ENABLED=true
+      - WAHA_DASHBOARD_NO_PASSWORD=true
+      - WHATSAPP_SWAGGER_NO_PASSWORD=true
+      - WAHA_PRINT_QR=false
+      # Auto-start the Demo1 session on container boot
+      - WAHA_DEFAULT_SESSION=Demo1
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      # Bind-mount to project directory so sessions survive docker-compose down/up
+      - ./waha_data:/app/.sessions

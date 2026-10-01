@@ -1,0 +1,282 @@
+{
+  "name": "HOSPITAL | 02 No-Show Recovery",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "hospital-demo-noshow",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "webhookId": "hospital-demo-noshow",
+      "id": "wf2-node-webhook",
+      "name": "Webhook No-Show In",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        160,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=http://localhost:3001/api/appointments/{{ $json.body.appointment_id || $json.appointment_id }}",
+        "options": {}
+      },
+      "id": "wf2-node-lookup-appt",
+      "name": "Lookup Appointment",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        380,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "=http://localhost:3001/api/appointments/{{ $json.appointment.appointment_id }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={ \"attendance_status\": \"no_show\" }",
+        "options": {}
+      },
+      "id": "wf2-node-set-noshow",
+      "name": "Set Status to No-Show",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        600,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=http://localhost:3001/api/communication-logs/check?appointment_id={{ $json.appointment.appointment_id }}&template_name=NOSHOW_RECOVERY_01",
+        "options": {}
+      },
+      "id": "wf2-node-idempotency",
+      "name": "Idempotency Check",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        820,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "recovery-already-sent",
+              "leftValue": "={{ $json.exists }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "wf2-node-if-sent",
+      "name": "Already Sent?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1040,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"success\": true,\n  \"status\": \"SKIPPED_IDEMPOTENT\",\n  \"message\": \"No-show recovery message already sent for this appointment.\"\n}",
+        "options": {}
+      },
+      "id": "wf2-node-stop-dup",
+      "name": "Respond Already Handled",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1260,
+        180
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst appt = $('Lookup Appointment').first().json.appointment;\n// Blueprint Section K: Prompt 3 - No-Show Recovery\nconst message = `Hi ${appt.patient_name || 'there'}, we missed you for your appointment on ${appt.slot_start}. Would you like us to help find another time that works for you?`;\n\nreturn [{\n  json: {\n    appointment_id: appt.appointment_id,\n    patient_id: appt.patient_id,\n    patient_name: appt.patient_name,\n    slot_start: appt.slot_start,\n    recovery_message: message\n  }\n}];\n"
+      },
+      "id": "wf2-node-draft-recovery",
+      "name": "Draft Recovery Message (Prompt 3)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1260,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:3001/api/communication-logs",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"patient_id\": \"{{ $json.patient_id }}\",\n  \"channel\": \"whatsapp\",\n  \"template_name\": \"NOSHOW_RECOVERY_01\",\n  \"workflow_name\": \"HOSPITAL | 02 No-Show Recovery\",\n  \"message_body\": \"{{ $json.recovery_message }}\",\n  \"delivery_status\": \"delivered\",\n  \"correlation_id\": \"RECOV-{{ $json.appointment_id }}\"\n}",
+        "options": {}
+      },
+      "id": "wf2-node-log-recovery",
+      "name": "Log Recovery Communication",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1480,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:3001/api/follow-ups",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"patient_id\": \"{{ $('Draft Recovery Message (Prompt 3)').item.json.patient_id }}\",\n  \"category\": \"No-Show Recovery Call\",\n  \"approved_window\": \"24h\",\n  \"owner\": \"Outpatient Coordinator\"\n}",
+        "options": {}
+      },
+      "id": "wf2-node-create-followup",
+      "name": "Create Follow-Up Task",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1700,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"success\": true,\n  \"status\": \"recovery_initiated\",\n  \"appointment_id\": \"{{ $('Draft Recovery Message (Prompt 3)').item.json.appointment_id }}\",\n  \"patient_name\": \"{{ $('Draft Recovery Message (Prompt 3)').item.json.patient_name }}\",\n  \"recovery_message\": \"{{ $('Draft Recovery Message (Prompt 3)').item.json.recovery_message }}\"\n}",
+        "options": {}
+      },
+      "id": "wf2-node-respond-recovery",
+      "name": "Respond Recovery Sent",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1920,
+        420
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook No-Show In": {
+      "main": [
+        [
+          {
+            "node": "Lookup Appointment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lookup Appointment": {
+      "main": [
+        [
+          {
+            "node": "Set Status to No-Show",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Status to No-Show": {
+      "main": [
+        [
+          {
+            "node": "Idempotency Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Idempotency Check": {
+      "main": [
+        [
+          {
+            "node": "Already Sent?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Already Sent?": {
+      "main": [
+        [
+          {
+            "node": "Respond Already Handled",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Draft Recovery Message (Prompt 3)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Draft Recovery Message (Prompt 3)": {
+      "main": [
+        [
+          {
+            "node": "Log Recovery Communication",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Recovery Communication": {
+      "main": [
+        [
+          {
+            "node": "Create Follow-Up Task",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Follow-Up Task": {
+      "main": [
+        [
+          {
+            "node": "Respond Recovery Sent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
